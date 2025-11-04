@@ -1,0 +1,273 @@
+import java.util.*;
+import java.time.LocalDateTime;
+
+/**
+ * Simplified Online Student Management System
+ * Demonstrates concepts of:
+ *  - Dependency Injection (manual wiring)
+ *  - CRUD Operations
+ *  - Transaction-like management for payments/refunds
+ *
+ * No external frameworks required — runs as a single Java file.
+ */
+
+class Course {
+    private static long nextId = 1;
+    private final long courseId;
+    private String courseName;
+    private int duration;
+
+    public Course(String courseName, int duration) {
+        this.courseId = nextId++;
+        this.courseName = courseName;
+        this.duration = duration;
+    }
+
+    public long getCourseId() { return courseId; }
+    public String getCourseName() { return courseName; }
+    public int getDuration() { return duration; }
+
+    @Override
+    public String toString() {
+        return String.format("[%d] %s (%d months)", courseId, courseName, duration);
+    }
+}
+
+class Student {
+    private static long nextId = 1;
+    private final long studentId;
+    private String name;
+    private double balance;
+    private Course course;
+
+    public Student(String name, Course course, double balance) {
+        this.studentId = nextId++;
+        this.name = name;
+        this.course = course;
+        this.balance = balance;
+    }
+
+    public long getStudentId() { return studentId; }
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public double getBalance() { return balance; }
+    public void setBalance(double balance) { this.balance = balance; }
+    public Course getCourse() { return course; }
+    public void setCourse(Course course) { this.course = course; }
+
+    @Override
+    public String toString() {
+        String c = (course != null) ? course.getCourseName() : "None";
+        return String.format("[%d] %s | Course: %s | Balance: %.2f", studentId, name, c, balance);
+    }
+}
+
+class Payment {
+    private static long nextId = 1;
+    private final long paymentId;
+    private final long studentId;
+    private final double amount;
+    private final LocalDateTime date;
+
+    public Payment(long studentId, double amount) {
+        this.paymentId = nextId++;
+        this.studentId = studentId;
+        this.amount = amount;
+        this.date = LocalDateTime.now();
+    }
+
+    @Override
+    public String toString() {
+        return String.format("[%d] Student #%d | Amount: %.2f | Date: %s",
+                paymentId, studentId, amount, date);
+    }
+}
+
+// DAO layer (in-memory)
+class StudentDAO {
+    private final Map<Long, Student> students = new HashMap<>();
+
+    public void save(Student s) { students.put(s.getStudentId(), s); }
+    public Student find(long id) { return students.get(id); }
+    public List<Student> findAll() { return new ArrayList<>(students.values()); }
+    public void delete(long id) { students.remove(id); }
+}
+
+class CourseDAO {
+    private final Map<Long, Course> courses = new HashMap<>();
+
+    public void save(Course c) { courses.put(c.getCourseId(), c); }
+    public Course find(long id) { return courses.get(id); }
+    public List<Course> findAll() { return new ArrayList<>(courses.values()); }
+}
+
+class PaymentDAO {
+    private final List<Payment> payments = new ArrayList<>();
+    public void save(Payment p) { payments.add(p); }
+    public List<Payment> findAll() { return payments; }
+}
+
+// Services
+class StudentService {
+    private final StudentDAO studentDAO;
+    private final CourseDAO courseDAO;
+
+    public StudentService(StudentDAO studentDAO, CourseDAO courseDAO) {
+        this.studentDAO = studentDAO;
+        this.courseDAO = courseDAO;
+    }
+
+    public Student addStudent(String name, long courseId, double balance) {
+        Course c = courseDAO.find(courseId);
+        if (c == null) throw new RuntimeException("Course not found.");
+        Student s = new Student(name, c, balance);
+        studentDAO.save(s);
+        return s;
+    }
+
+    public void updateStudentName(long id, String name) {
+        Student s = studentDAO.find(id);
+        if (s == null) throw new RuntimeException("Student not found.");
+        s.setName(name);
+    }
+
+    public void assignCourse(long sid, long cid) {
+        Student s = studentDAO.find(sid);
+        Course c = courseDAO.find(cid);
+        if (s == null || c == null) throw new RuntimeException("Invalid student or course.");
+        s.setCourse(c);
+    }
+
+    public void deleteStudent(long id) {
+        studentDAO.delete(id);
+    }
+
+    public List<Student> listAll() { return studentDAO.findAll(); }
+    public Student find(long id) { return studentDAO.find(id); }
+}
+
+class FeeService {
+    private final StudentDAO studentDAO;
+    private final PaymentDAO paymentDAO;
+
+    public FeeService(StudentDAO studentDAO, PaymentDAO paymentDAO) {
+        this.studentDAO = studentDAO;
+        this.paymentDAO = paymentDAO;
+    }
+
+    // Simulated @Transactional
+    public void payFee(long sid, double amount) {
+        Student s = studentDAO.find(sid);
+        if (s == null) throw new RuntimeException("Student not found.");
+        if (amount <= 0) throw new RuntimeException("Invalid amount.");
+        double oldBal = s.getBalance();
+        try {
+            s.setBalance(oldBal - amount);
+            paymentDAO.save(new Payment(sid, amount));
+        } catch (Exception e) {
+            s.setBalance(oldBal); // rollback simulation
+            throw e;
+        }
+    }
+
+    public void refund(long sid, double amount) {
+        Student s = studentDAO.find(sid);
+        if (s == null) throw new RuntimeException("Student not found.");
+        double oldBal = s.getBalance();
+        try {
+            s.setBalance(oldBal + amount);
+            paymentDAO.save(new Payment(sid, -amount));
+        } catch (Exception e) {
+            s.setBalance(oldBal); // rollback
+            throw e;
+        }
+    }
+
+    public List<Payment> listPayments() { return paymentDAO.findAll(); }
+}
+
+// Main Application
+public class Main {
+    public static void main(String[] args) {
+        // Manual "Dependency Injection"
+        CourseDAO courseDAO = new CourseDAO();
+        StudentDAO studentDAO = new StudentDAO();
+        PaymentDAO paymentDAO = new PaymentDAO();
+        StudentService studentService = new StudentService(studentDAO, courseDAO);
+        FeeService feeService = new FeeService(studentDAO, paymentDAO);
+
+        // Seed some courses
+        Course c1 = new Course("Java Basics", 3);
+        Course c2 = new Course("Spring + Hibernate", 6);
+        courseDAO.save(c1);
+        courseDAO.save(c2);
+
+        Scanner sc = new Scanner(System.in);
+        while (true) {
+            System.out.println("\n==== Online Student Management ====");
+            System.out.println("1. Add Student");
+            System.out.println("2. Assign Course");
+            System.out.println("3. Update Student");
+            System.out.println("4. Delete Student");
+            System.out.println("5. List Students");
+            System.out.println("6. Pay Fee");
+            System.out.println("7. Refund");
+            System.out.println("8. List Payments");
+            System.out.println("9. List Courses");
+            System.out.println("0. Exit");
+            System.out.print("Enter choice: ");
+            int ch = Integer.parseInt(sc.nextLine());
+
+            try {
+                switch (ch) {
+                    case 1 -> {
+                        System.out.print("Name: "); String name = sc.nextLine();
+                        System.out.print("CourseId: "); long cid = Long.parseLong(sc.nextLine());
+                        System.out.print("Balance: "); double bal = Double.parseDouble(sc.nextLine());
+                        Student s = studentService.addStudent(name, cid, bal);
+                        System.out.println("Added: " + s);
+                    }
+                    case 2 -> {
+                        System.out.print("StudentId: "); long sid = Long.parseLong(sc.nextLine());
+                        System.out.print("CourseId: "); long cid = Long.parseLong(sc.nextLine());
+                        studentService.assignCourse(sid, cid);
+                        System.out.println("Course assigned.");
+                    }
+                    case 3 -> {
+                        System.out.print("StudentId: "); long sid = Long.parseLong(sc.nextLine());
+                        System.out.print("New Name: "); String nm = sc.nextLine();
+                        studentService.updateStudentName(sid, nm);
+                        System.out.println("Updated.");
+                    }
+                    case 4 -> {
+                        System.out.print("StudentId: "); long sid = Long.parseLong(sc.nextLine());
+                        studentService.deleteStudent(sid);
+                        System.out.println("Deleted.");
+                    }
+                    case 5 -> studentService.listAll().forEach(System.out::println);
+                    case 6 -> {
+                        System.out.print("StudentId: "); long sid = Long.parseLong(sc.nextLine());
+                        System.out.print("Amount: "); double amt = Double.parseDouble(sc.nextLine());
+                        feeService.payFee(sid, amt);
+                        System.out.println("Payment successful.");
+                    }
+                    case 7 -> {
+                        System.out.print("StudentId: "); long sid = Long.parseLong(sc.nextLine());
+                        System.out.print("Amount: "); double amt = Double.parseDouble(sc.nextLine());
+                        feeService.refund(sid, amt);
+                        System.out.println("Refund successful.");
+                    }
+                    case 8 -> feeService.listPayments().forEach(System.out::println);
+                    case 9 -> courseDAO.findAll().forEach(System.out::println);
+                    case 0 -> {
+                        System.out.println("Exiting...");
+                        return;
+                    }
+                    default -> System.out.println("Invalid choice.");
+                }
+            } catch (Exception e) {
+                System.out.println("Error: " + e.getMessage());
+            }
+        }
+    }
+}
